@@ -253,14 +253,13 @@ class DatasetGenerator:
             names_by_cat_id = {cat["id"]: cat["name"] for cat in self.coco["categories"]}
 
             preview_dir = self.output_dir / "preview" / "coco"
+            preview_dir.mkdir(parents=True, exist_ok=True)
             for img in sampled:
                 split_name = self.image_split.get(img["id"], "")
-                out_dir = preview_dir / split_name
-                out_dir.mkdir(parents=True, exist_ok=True)
                 draw_coco_preview(
                     self.images_dir / split_name / img["file_name"],
                     anns_by_image.get(img["id"], []), names_by_cat_id,
-                    out_dir / img["file_name"]
+                    preview_dir / img["file_name"]
                 )
             print(f"COCO preview written to {preview_dir} ({len(sampled)} images)")
 
@@ -268,15 +267,14 @@ class DatasetGenerator:
             names_by_yolo_id = self._names_by_yolo_id()
 
             preview_dir = self.output_dir / "preview" / "yolo"
+            preview_dir.mkdir(parents=True, exist_ok=True)
             for img in sampled:
                 split_name = self.image_split.get(img["id"], "")
-                out_dir = preview_dir / split_name
-                out_dir.mkdir(parents=True, exist_ok=True)
                 label_filename = Path(img["file_name"]).stem + ".txt"
                 draw_yolo_preview(
                     self.images_dir / split_name / img["file_name"],
                     self.labels_dir / split_name / label_filename, names_by_yolo_id,
-                    out_dir / img["file_name"]
+                    preview_dir / img["file_name"]
                 )
             print(f"YOLO preview written to {preview_dir} ({len(sampled)} images)")
 
