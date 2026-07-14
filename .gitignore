@@ -3,5 +3,5 @@ __pycache__/
 
 venv/
 dataset/
-orhto_shp/
+ortho_gpkg/
 
