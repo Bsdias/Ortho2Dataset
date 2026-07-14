@@ -37,5 +37,13 @@ def list_layers(path):
 
 
 def load_shape(path, layer=None):
-    """Reads a vector source as a GeoDataFrame, optionally selecting a specific layer."""
-    return gpd.read_file(path, layer=layer) if layer else gpd.read_file(path)
+    """Reads a vector source as a GeoDataFrame, optionally selecting a specific layer.
+
+    Uses `on_invalid="ignore"` because some source files contain malformed
+    geometries (e.g. a LinearRing with only 2 points), which otherwise raise
+    a GEOSException during reading; such geometries are read as null/empty
+    instead of crashing, then dropped.
+    """
+    gdf = gpd.read_file(path, layer=layer, engine="pyogrio", on_invalid="ignore")
+    gdf = gdf[gdf.geometry.notna()]
+    return gdf[~gdf.geometry.is_empty]
