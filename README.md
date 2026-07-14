@@ -113,11 +113,7 @@ tiles — not tied to raster position.
 
 Renders a random sample of tiles with their annotations drawn on top of the
 image, so you can visually confirm the pipeline worked correctly without
-opening a full annotation tool (CVAT, LabelImg, etc.). The sample is read
-back from the actual files written to disk (not recomputed in memory), so it
-reflects exactly what ended up in the dataset. If `format: both`, two
-separate preview folders are generated (one per annotation format) so you
-can cross-check that COCO and YOLO outputs render identically.
+opening a full annotation tool (CVAT, LabelImg, etc.).
 
 ## CLI reference
 
@@ -163,7 +159,7 @@ dataset/
   annotations/instances_{train,val,test}.json  # if format includes coco
   classes.txt                                  # if format includes yolo
   data.yaml                                    # if format includes yolo
-  preview/{coco,yolo}/{train,val,test}/ ...    # if preview is set
+  preview/{coco,yolo}/ ...                     # if preview is set (not split into train/val/test)
 ```
 
 `data.yaml` follows the Ultralytics convention (`path`, `train`, `val`,
