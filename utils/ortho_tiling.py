@@ -28,6 +28,10 @@ def resample_raster(input_tif, output_dir, target_res, resampling="cubic"):
         cmd = [
             "gdalwarp", "-tr", str(target_res), str(target_res),
             "-r", resampling, "-co", "COMPRESS=LZW", "-co", "TILED=YES",
+            # Forced rather than left at GDAL's IF_NEEDED default: with compression
+            # GDAL can't predict the output size, so it never triggers BigTIFF on its
+            # own and dies once the file crosses the 4GB classic-TIFF limit.
+            "-co", "BIGTIFF=YES",
             str(input_tif), str(out_tif)
         ]
         subprocess.run(cmd, check=True)
