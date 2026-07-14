@@ -11,10 +11,16 @@ from shapely.geometry import box
 def resample_raster(input_tif, output_dir, target_res, resampling="cubic"):
     """Resamples a raster to `target_res` (CRS units/pixel) using gdalwarp.
 
+    `target_res=0` skips resampling entirely and returns `input_tif` unchanged,
+    keeping the orthomosaic's native resolution.
+
     Reuses an existing output file if one is already present, since gdalwarp
     can be slow on large orthomosaics.
     """
     input_tif = Path(input_tif)
+    if not target_res:
+        return input_tif
+
     output_dir = Path(output_dir)
     out_tif = output_dir / f"{input_tif.stem}_{int(target_res * 100)}cm.tif"
     if not out_tif.exists():

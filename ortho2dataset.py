@@ -93,6 +93,9 @@ class DatasetGenerator:
         with rasterio.open(tif_path) as src:
             transform = src.transform
             width, height, crs = src.width, src.height, src.crs
+            # Derived from the raster actually opened (native or resampled), so
+            # area-in-pixels is correct even with res=0 (native resolution).
+            pixel_area = abs(transform.a * transform.e)
 
             # Ensure every shape is in the same CRS as the raster
             for name in self.category_names:
@@ -141,7 +144,7 @@ class DatasetGenerator:
 
                         if self.output_format in ("coco", "both"):
                             ann = build_annotation(
-                                polygons, clipped.area / (self.target_res ** 2),
+                                polygons, clipped.area / pixel_area,
                                 self.ann_id_counter, img_id, cat_id
                             )
                             self.coco["annotations"].append(ann)
@@ -315,7 +318,8 @@ if __name__ == "__main__":
         "--res", type=float,
         help="Output resolution of the dataset, in meters/pixel. Since tile size is fixed "
              "in pixels, this controls how much ground area each tile covers "
-             f"(tile_size * res meters per side). Default: {DEFAULTS['res']}."
+             f"(tile_size * res meters per side). Use 0 to keep the orthomosaic's native "
+             f"resolution (no resampling). Default: {DEFAULTS['res']}."
     )
     parser.add_argument(
         "--tile-size", type=int,
