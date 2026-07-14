@@ -29,3 +29,14 @@ shapes:
   class2:
     path: /path/to/data.gpkg
     layer: layer2
+
+# Optional: split the generated tiles into train/val/test partitions.
+# Ratios must add up to 1.0. Omit "test" (or set it to 0) to skip a test split.
+# When this section is present and format includes "yolo", a data.yaml
+# (Ultralytics-style) is also written pointing at the split folders.
+# Remove this whole section to keep a single flat dataset (no splitting).
+split:
+  train: 0.7
+  val: 0.2
+  test: 0.1
+  seed: 42   # optional, for a reproducible shuffle

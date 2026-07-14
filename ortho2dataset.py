@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Generates a COCO dataset from an orthomosaic and any number of georeferenced shapefiles.
+Generates a COCO and/or YOLO dataset from an orthomosaic and any number of
+georeferenced shapefiles, optionally split into train/val/test (see the
+`split` section in config.example.yaml; only configurable via --config).
 
 Usage:
     # Discover layer names inside a multi-layer GeoPackage first, if needed:
@@ -17,9 +19,11 @@ Usage:
         --res 0.20
 """
 import json
+import shutil
 import argparse
 from pathlib import Path
 
+import yaml
 import rasterio
 from PIL import Image
 from tqdm import tqdm
@@ -30,24 +34,28 @@ from utils.shape2coco import build_categories, build_annotation
 from utils.shapes import parse_shape_spec, list_layers, load_shape
 from utils.shape2yolo import build_category_id_map, build_yolo_lines, write_label_file, write_classes_file
 from utils.config import load_config, normalize_shapes, DEFAULTS
+from utils.split import parse_split_config, assign_splits
 
 OUTPUT_FORMATS = ("coco", "yolo", "both")
 
 
 class DatasetGenerator:
-    def __init__(self, input_tif, shapes, output_dir, tile_size=1024, res=0.20, output_format="coco"):
+    def __init__(self, input_tif, shapes, output_dir, tile_size=1024, res=0.20, output_format="coco", split=None):
         """
         shapes: dict mapping category name -> (path, layer) to a georeferenced
                 shapefile/GeoPackage. `layer` may be None for single-layer sources.
         res: output resolution of the dataset in meters/pixel. Since tile_size is fixed
              in pixels, this sets how much ground area each tile covers.
         output_format: "coco", "yolo", or "both" — which annotation format(s) to write.
+        split: parsed split config (see utils.split.parse_split_config), or None
+               to keep a single flat dataset with no train/val/test partitioning.
         """
         self.input_tif = Path(input_tif)
         self.output_dir = Path(output_dir)
         self.tile_size = tile_size
         self.target_res = res
         self.output_format = output_format
+        self.split = split
 
         self.images_dir = self.output_dir / "images"
         self.images_dir.mkdir(parents=True, exist_ok=True)
@@ -97,13 +105,14 @@ class DatasetGenerator:
                 img_array = read_tile_image(src, window)
                 Image.fromarray(img_array).save(self.images_dir / tile_filename, quality=95)
 
-                if self.output_format in ("coco", "both"):
-                    self.coco["images"].append({
-                        "id": img_id,
-                        "file_name": tile_filename,
-                        "width": window.width,
-                        "height": window.height
-                    })
+                # Tracked regardless of output_format: needed to assign tiles to
+                # a train/val/test split and to build data.yaml/classes.txt.
+                self.coco["images"].append({
+                    "id": img_id,
+                    "file_name": tile_filename,
+                    "width": window.width,
+                    "height": window.height
+                })
 
                 yolo_lines = [] if self.output_format in ("yolo", "both") else None
 
@@ -138,11 +147,23 @@ class DatasetGenerator:
 
                 img_id += 1
 
+        if self.split:
+            assignment = assign_splits([img["id"] for img in self.coco["images"]], self.split)
+            self._write_split_outputs(assignment)
+        else:
+            self._write_flat_outputs()
+
+        print(f"Dataset successfully created at {self.output_dir}")
+
+    def _names_by_yolo_id(self):
+        names = [None] * len(self.cat_id_to_yolo)
+        for cat in self.coco["categories"]:
+            names[self.cat_id_to_yolo[cat["id"]]] = cat["name"]
+        return names
+
+    def _write_flat_outputs(self):
         if self.output_format in ("yolo", "both"):
-            names_by_yolo_id = [None] * len(self.cat_id_to_yolo)
-            for cat in self.coco["categories"]:
-                names_by_yolo_id[self.cat_id_to_yolo[cat["id"]]] = cat["name"]
-            write_classes_file(self.output_dir / "classes.txt", names_by_yolo_id)
+            write_classes_file(self.output_dir / "classes.txt", self._names_by_yolo_id())
             print(f"YOLO labels written to {self.labels_dir}")
 
         if self.output_format in ("coco", "both"):
@@ -150,7 +171,54 @@ class DatasetGenerator:
                 json.dump(self.coco, f, indent=4)
             print(f"COCO annotations written to {self.output_dir / 'annotations.json'}")
 
-        print(f"Dataset successfully created at {self.output_dir}")
+    def _write_split_outputs(self, assignment):
+        split_names = sorted(set(assignment.values()))
+        images_by_split = {name: [] for name in split_names}
+
+        for name in split_names:
+            (self.images_dir / name).mkdir(parents=True, exist_ok=True)
+            if self.output_format in ("yolo", "both"):
+                (self.labels_dir / name).mkdir(parents=True, exist_ok=True)
+
+        for img in self.coco["images"]:
+            split_name = assignment[img["id"]]
+            images_by_split[split_name].append(img)
+            shutil.move(self.images_dir / img["file_name"], self.images_dir / split_name / img["file_name"])
+            if self.output_format in ("yolo", "both"):
+                label_filename = Path(img["file_name"]).stem + ".txt"
+                shutil.move(self.labels_dir / label_filename, self.labels_dir / split_name / label_filename)
+
+        if self.output_format in ("yolo", "both"):
+            write_classes_file(self.output_dir / "classes.txt", self._names_by_yolo_id())
+            self._write_data_yaml(split_names)
+            print(f"YOLO labels split into {self.labels_dir}/{{{', '.join(split_names)}}}")
+
+        if self.output_format in ("coco", "both"):
+            annotations_dir = self.output_dir / "annotations"
+            annotations_dir.mkdir(parents=True, exist_ok=True)
+            for name in split_names:
+                image_ids = {img["id"] for img in images_by_split[name]}
+                split_coco = {
+                    "images": images_by_split[name],
+                    "annotations": [a for a in self.coco["annotations"] if a["image_id"] in image_ids],
+                    "categories": self.coco["categories"],
+                }
+                with open(annotations_dir / f"instances_{name}.json", "w") as f:
+                    json.dump(split_coco, f, indent=4)
+            print(f"COCO annotations split into {annotations_dir}/instances_{{{', '.join(split_names)}}}.json")
+
+    def _write_data_yaml(self, split_names):
+        data = {
+            "path": str(self.output_dir.resolve()),
+            "names": {i: name for i, name in enumerate(self._names_by_yolo_id())},
+        }
+        for name in ("train", "val", "test"):
+            if name in split_names:
+                data[name] = f"images/{name}"
+
+        with open(self.output_dir / "data.yaml", "w") as f:
+            yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+        print(f"data.yaml written to {self.output_dir / 'data.yaml'}")
 
 
 def parse_shapes(values):
@@ -228,5 +296,12 @@ if __name__ == "__main__":
             "(pass as flags or set them in --config)"
         )
 
-    gen = DatasetGenerator(tif, shapes, out, tile_size=tile_size, res=res, output_format=output_format)
+    try:
+        split = parse_split_config(config.get("split"))
+    except ValueError as e:
+        parser.error(str(e))
+
+    gen = DatasetGenerator(
+        tif, shapes, out, tile_size=tile_size, res=res, output_format=output_format, split=split
+    )
     gen.run()
