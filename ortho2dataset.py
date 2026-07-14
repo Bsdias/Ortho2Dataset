@@ -7,10 +7,9 @@ Usage:
     python ortho2dataset.py --list-layers /path/to/data.gpkg
 
     python ortho2dataset.py \
-        --tif /media/bruno/HDD/DEV/PedroAfonso_Orto_and_Shapes/pedro_afonso__prepared.tif \
-        --shapes lot=/media/bruno/HDD/DEV/PedroAfonso_Orto_and_Shapes/data.gpkg:lots \
-                 block=/media/bruno/HDD/DEV/PedroAfonso_Orto_and_Shapes/data.gpkg:blocks \
-        --out /media/bruno/HDD/DEV/PedroAfonso_Orto_and_Shapes/dataset_qd_lt_pedroafonso \
+        --tif /media/bruno/HDD/DEV/miracema/ortho/TIFF/miracema.tif \
+        --shapes lot=ortho_gpkg/lotes.gpkg:lotes — lotes_unificados \
+        --out dataset/miracema_lots/ \
         --res 0.20
 """
 import json
@@ -22,25 +21,34 @@ from PIL import Image
 from tqdm import tqdm
 
 from utils.ortho_tiling import resample_raster, iter_tile_windows, tile_bbox, read_tile_image
+from utils.geometry import clip_to_tile, geom_to_pixel_polygons
 from utils.shape2coco import build_categories, build_annotation
 from utils.shapes import parse_shape_spec, list_layers, load_shape
+from utils.shape2yolo import build_category_id_map, build_yolo_lines, write_label_file, write_classes_file
+
+OUTPUT_FORMATS = ("coco", "yolo", "both")
 
 
-class CocoDatasetGenerator:
-    def __init__(self, input_tif, shapes, output_dir, tile_size=1024, res=0.20):
+class DatasetGenerator:
+    def __init__(self, input_tif, shapes, output_dir, tile_size=1024, res=0.20, output_format="coco"):
         """
         shapes: dict mapping category name -> (path, layer) to a georeferenced
                 shapefile/GeoPackage. `layer` may be None for single-layer sources.
         res: output resolution of the dataset in meters/pixel. Since tile_size is fixed
              in pixels, this sets how much ground area each tile covers.
+        output_format: "coco", "yolo", or "both" — which annotation format(s) to write.
         """
         self.input_tif = Path(input_tif)
         self.output_dir = Path(output_dir)
         self.tile_size = tile_size
         self.target_res = res
+        self.output_format = output_format
 
         self.images_dir = self.output_dir / "images"
         self.images_dir.mkdir(parents=True, exist_ok=True)
+        if self.output_format in ("yolo", "both"):
+            self.labels_dir = self.output_dir / "labels"
+            self.labels_dir.mkdir(parents=True, exist_ok=True)
 
         print("Reading shapefiles...")
         self.category_names = list(shapes.keys())
@@ -53,6 +61,7 @@ class CocoDatasetGenerator:
             "categories": build_categories(self.category_names)
         }
         self.ann_id_counter = 1
+        self.cat_id_to_yolo = build_category_id_map(self.coco["categories"])
 
     def run(self):
         tif_path = resample_raster(self.input_tif, self.output_dir, self.target_res)
@@ -83,30 +92,60 @@ class CocoDatasetGenerator:
                 img_array = read_tile_image(src, window)
                 Image.fromarray(img_array).save(self.images_dir / tile_filename, quality=95)
 
-                self.coco["images"].append({
-                    "id": img_id,
-                    "file_name": tile_filename,
-                    "width": window.width,
-                    "height": window.height
-                })
+                if self.output_format in ("coco", "both"):
+                    self.coco["images"].append({
+                        "id": img_id,
+                        "file_name": tile_filename,
+                        "width": window.width,
+                        "height": window.height
+                    })
+
+                yolo_lines = [] if self.output_format in ("yolo", "both") else None
 
                 for name, gdf_in in matches.items():
                     cat_id = self.cat_ids[name]
+                    yolo_class = self.cat_id_to_yolo[cat_id]
                     for _, row in gdf_in.iterrows():
-                        ann = build_annotation(
-                            row.geometry, self.ann_id_counter, img_id, cat_id,
-                            bbox, transform, window,
-                            pixel_area_scale=1.0 / (self.target_res ** 2)
-                        )
-                        if ann is not None:
+                        clipped = clip_to_tile(row.geometry, bbox)
+                        if clipped is None:
+                            continue
+
+                        polygons = geom_to_pixel_polygons(clipped, transform, window)
+                        if not polygons:
+                            continue
+
+                        if self.output_format in ("coco", "both"):
+                            ann = build_annotation(
+                                polygons, clipped.area / (self.target_res ** 2),
+                                self.ann_id_counter, img_id, cat_id
+                            )
                             self.coco["annotations"].append(ann)
                             self.ann_id_counter += 1
 
+                        if yolo_lines is not None:
+                            yolo_lines.extend(
+                                build_yolo_lines(polygons, yolo_class, window.width, window.height)
+                            )
+
+                if yolo_lines is not None:
+                    label_filename = Path(tile_filename).stem + ".txt"
+                    write_label_file(self.labels_dir / label_filename, yolo_lines)
+
                 img_id += 1
 
-        with open(self.output_dir / "annotations.json", "w") as f:
-            json.dump(self.coco, f, indent=4)
-        print(f"COCO dataset successfully created at {self.output_dir}")
+        if self.output_format in ("yolo", "both"):
+            names_by_yolo_id = [None] * len(self.cat_id_to_yolo)
+            for cat in self.coco["categories"]:
+                names_by_yolo_id[self.cat_id_to_yolo[cat["id"]]] = cat["name"]
+            write_classes_file(self.output_dir / "classes.txt", names_by_yolo_id)
+            print(f"YOLO labels written to {self.labels_dir}")
+
+        if self.output_format in ("coco", "both"):
+            with open(self.output_dir / "annotations.json", "w") as f:
+                json.dump(self.coco, f, indent=4)
+            print(f"COCO annotations written to {self.output_dir / 'annotations.json'}")
+
+        print(f"Dataset successfully created at {self.output_dir}")
 
 
 def parse_shapes(values):
@@ -145,6 +184,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--tile-size", type=int, default=1024, help="Tile size in pixels")
     parser.add_argument(
+        "--format", choices=OUTPUT_FORMATS, default="coco",
+        help="Annotation format(s) to generate: 'coco' (annotations.json), "
+             "'yolo' (labels/*.txt + classes.txt), or 'both'."
+    )
+    parser.add_argument(
         "--list-layers", metavar="PATH",
         help="List the layer names available in PATH (e.g. a multi-layer GeoPackage) and exit, "
              "without processing anything."
@@ -152,5 +196,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     shapes = parse_shapes(args.shapes)
-    gen = CocoDatasetGenerator(args.tif, shapes, args.out, tile_size=args.tile_size, res=args.res)
+    gen = DatasetGenerator(
+        args.tif, shapes, args.out, tile_size=args.tile_size, res=args.res, output_format=args.format
+    )
     gen.run()
