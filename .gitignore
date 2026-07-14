@@ -4,4 +4,5 @@ __pycache__/
 venv/
 dataset/
 ortho_gpkg/
+config.yaml
 

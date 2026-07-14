@@ -1,0 +1,31 @@
+# Copy this file to config.yaml and edit it for your project.
+# Any value here can still be overridden on the command line, e.g.:
+#   python ortho2dataset.py --config config.yaml --res 0.10
+
+tif: /path/to/orthomosaic.tif
+out: dataset/my_dataset/
+
+# Spatial resolution of the output images, in meters/pixel.
+# E.g. with tile_size=1024, res=0.20 -> each tile covers ~204.8m per side.
+res: 0.20
+
+tile_size: 1024
+format: both   # coco, yolo, or both
+
+# Each key below (e.g. "class1", "class2") becomes a category/class in the output
+# dataset (COCO "categories" name, or the class index in YOLO's classes.txt) —
+# it does not need to match the layer or file name, name it whatever you want
+# your classes to be called.
+shapes:
+
+  # A single-layer source can just give the path directly:
+  class1: /path/to/lots.gpkg
+
+  # A multi-layer GeoPackage needs the layer name too
+  # (run `python ortho2dataset.py --list-layers /path/to/data.gpkg` to discover them):
+  class1:
+    path: /path/to/data.gpkg
+    layer: layer1
+  class2:
+    path: /path/to/data.gpkg
+    layer: layer2

@@ -6,10 +6,14 @@ Usage:
     # Discover layer names inside a multi-layer GeoPackage first, if needed:
     python ortho2dataset.py --list-layers /path/to/data.gpkg
 
+    # Run from a config file (copy config.example.yaml -> config.yaml and edit it):
+    python ortho2dataset.py --config config.yaml
+
+    # Or pass everything as flags (any of these override the matching config.yaml value):
     python ortho2dataset.py \
-        --tif /media/bruno/HDD/DEV/miracema/ortho/TIFF/miracema.tif \
-        --shapes lot=ortho_gpkg/lotes.gpkg:lotes — lotes_unificados \
-        --out dataset/miracema_lots/ \
+        --tif /path/to/orthomosaic.tif \
+        --shapes class1=shape/data.gpkg:layer1 \
+        --out dataset/my_dataset/\
         --res 0.20
 """
 import json
@@ -25,6 +29,7 @@ from utils.geometry import clip_to_tile, geom_to_pixel_polygons
 from utils.shape2coco import build_categories, build_annotation
 from utils.shapes import parse_shape_spec, list_layers, load_shape
 from utils.shape2yolo import build_category_id_map, build_yolo_lines, write_label_file, write_classes_file
+from utils.config import load_config, normalize_shapes, DEFAULTS
 
 OUTPUT_FORMATS = ("coco", "yolo", "both")
 
@@ -169,24 +174,32 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tif", required=True, help="Path to the input orthomosaic (GeoTIFF)")
     parser.add_argument(
-        "--shapes", required=True, nargs="+",
+        "--config", metavar="PATH",
+        help="Path to a YAML config file (see config.example.yaml) providing defaults for "
+             "any of the other flags below. Flags passed on the command line take precedence."
+    )
+    parser.add_argument("--tif", help="Path to the input orthomosaic (GeoTIFF)")
+    parser.add_argument(
+        "--shapes", nargs="+",
         help="One or more category=path[:layer] entries, e.g. "
              "--shapes lot=data.gpkg:lots block=data.gpkg:blocks"
     )
-    parser.add_argument("--out", required=True, help="Output directory for the dataset")
+    parser.add_argument("--out", help="Output directory for the dataset")
     parser.add_argument(
-        "--res", type=float, default=0.20,
+        "--res", type=float,
         help="Output resolution of the dataset, in meters/pixel. Since tile size is fixed "
              "in pixels, this controls how much ground area each tile covers "
-             "(tile_size * res meters per side)."
+             f"(tile_size * res meters per side). Default: {DEFAULTS['res']}."
     )
-    parser.add_argument("--tile-size", type=int, default=1024, help="Tile size in pixels")
     parser.add_argument(
-        "--format", choices=OUTPUT_FORMATS, default="coco",
+        "--tile-size", type=int,
+        help=f"Tile size in pixels. Default: {DEFAULTS['tile_size']}."
+    )
+    parser.add_argument(
+        "--format", choices=OUTPUT_FORMATS,
         help="Annotation format(s) to generate: 'coco' (annotations.json), "
-             "'yolo' (labels/*.txt + classes.txt), or 'both'."
+             f"'yolo' (labels/*.txt + classes.txt), or 'both'. Default: {DEFAULTS['format']}."
     )
     parser.add_argument(
         "--list-layers", metavar="PATH",
@@ -195,8 +208,25 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    shapes = parse_shapes(args.shapes)
-    gen = DatasetGenerator(
-        args.tif, shapes, args.out, tile_size=args.tile_size, res=args.res, output_format=args.format
-    )
+    config = load_config(args.config)
+
+    tif = args.tif or config.get("tif")
+    out = args.out or config.get("out")
+    res = args.res if args.res is not None else config.get("res", DEFAULTS["res"])
+    tile_size = args.tile_size if args.tile_size is not None else config.get("tile_size", DEFAULTS["tile_size"])
+    output_format = args.format or config.get("format", DEFAULTS["format"])
+    shapes = parse_shapes(args.shapes) if args.shapes else normalize_shapes(config.get("shapes"))
+
+    if output_format not in OUTPUT_FORMATS:
+        parser.error(f"format must be one of {OUTPUT_FORMATS}, got '{output_format}'")
+    missing = [flag for flag, val in (("--tif", tif), ("--out", out)) if not val]
+    if not shapes:
+        missing.append("--shapes")
+    if missing:
+        parser.error(
+            f"missing required settings: {', '.join(missing)} "
+            "(pass as flags or set them in --config)"
+        )
+
+    gen = DatasetGenerator(tif, shapes, out, tile_size=tile_size, res=res, output_format=output_format)
     gen.run()
