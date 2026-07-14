@@ -3,7 +3,7 @@ a long list of CLI flags every time."""
 import yaml
 
 DEFAULTS = {
-    "res": 0.20,
+    "res": 0,
     "tile_size": 1024,
     "format": "coco",
 }

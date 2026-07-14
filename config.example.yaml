@@ -5,8 +5,8 @@ tif: /path/to/orthomosaic.tif
 out: dataset/my_dataset/
 
 # Output resolution, in meters/pixel. E.g. tile_size=1024, res=0.20 -> ~204.8m per tile side.
-# Use 0 to keep the orthomosaic's native resolution (no resampling).
-res: 0.20
+# 0 (default) keeps the orthomosaic's native resolution (no resampling).
+res: 0
 
 tile_size: 1024
 format: both   # coco, yolo, or both
