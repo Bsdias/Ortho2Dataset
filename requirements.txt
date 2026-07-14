@@ -1,0 +1,11 @@
+geopandas>=0.14
+rasterio>=1.3
+shapely>=2.0
+numpy>=1.24
+Pillow>=10.0
+tqdm>=4.60
+pyogrio>=0.7
+
+# Also requires the GDAL command-line tools (gdalwarp) to be installed on the
+# system, e.g. `apt install gdal-bin` or via conda-forge — not installable
+# through pip alone.
