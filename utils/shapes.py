@@ -43,7 +43,13 @@ def load_shape(path, layer=None):
     geometries (e.g. a LinearRing with only 2 points), which otherwise raise
     a GEOSException during reading; such geometries are read as null/empty
     instead of crashing, then dropped.
+
+    Also repairs topologically invalid geometries (e.g. self-intersecting
+    polygons) with `make_valid()` — these parse fine but raise a
+    TopologyException later, when GEOS tries to clip/intersect them.
     """
     gdf = gpd.read_file(path, layer=layer, engine="pyogrio", on_invalid="ignore")
     gdf = gdf[gdf.geometry.notna()]
-    return gdf[~gdf.geometry.is_empty]
+    gdf = gdf[~gdf.geometry.is_empty]
+    gdf["geometry"] = gdf.geometry.make_valid()
+    return gdf
