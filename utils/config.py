@@ -37,3 +37,25 @@ def normalize_shapes(shapes_config):
         else:
             shapes[name] = (spec["path"], spec.get("layer"))
     return shapes
+
+
+def parse_preview_config(preview_config):
+    """Normalizes the `preview` config value into `{"ratio": float, "seed": int}`.
+
+    Accepts either a bare fraction (e.g. `preview: 0.05`) or a
+    `{ratio, seed}` mapping. Returns None if `preview_config` is falsy
+    (no preview requested).
+    """
+    if not preview_config:
+        return None
+    if isinstance(preview_config, dict):
+        ratio = float(preview_config.get("ratio", 0))
+        seed = preview_config.get("seed", 42)
+    else:
+        ratio = float(preview_config)
+        seed = 42
+
+    if not (0 < ratio <= 1):
+        raise ValueError(f"preview ratio must be between 0 and 1, got {ratio}")
+
+    return {"ratio": ratio, "seed": seed}

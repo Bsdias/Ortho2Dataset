@@ -1,42 +1,38 @@
-# Copy this file to config.yaml and edit it for your project.
-# Any value here can still be overridden on the command line, e.g.:
+# Copy to config.yaml and edit. Any value here can be overridden via CLI flag, e.g.:
 #   python ortho2dataset.py --config config.yaml --res 0.10
 
 tif: /path/to/orthomosaic.tif
 out: dataset/my_dataset/
 
-# Spatial resolution of the output images, in meters/pixel.
-# E.g. with tile_size=1024, res=0.20 -> each tile covers ~204.8m per side.
+# Output resolution, in meters/pixel. E.g. tile_size=1024, res=0.20 -> ~204.8m per tile side.
 res: 0.20
-
 tile_size: 1024
 format: both   # coco, yolo, or both
 
-# Each key below (e.g. "class1", "class2") becomes a category/class in the output
-# dataset (COCO "categories" name, or the class index in YOLO's classes.txt) —
-# it does not need to match the layer or file name, name it whatever you want
-# your classes to be called.
-shapes:
+# Fraction of images used to preview the dataset's annotations. Set to 0 to skip.
+preview: 0.05
 
-  # A single-layer source can just give the path directly:
+# Each key becomes a category/class in the output dataset — name it whatever you want,
+# it doesn't need to match the layer or file name.
+shapes:
+  # Single-layer source: just the path.
   class1: /path/to/lots.gpkg
 
-  # A multi-layer GeoPackage needs the layer name too
-  # (run `python ortho2dataset.py --list-layers /path/to/data.gpkg` to discover them):
-  class1:
+  # Multi-layer GeoPackage: needs path + layer (use --list-layers to discover names).
+  # The same file can supply more than one class, one per layer:
+  class2:
     path: /path/to/data.gpkg
     layer: layer1
-  class2:
+  class3:
     path: /path/to/data.gpkg
     layer: layer2
 
-# Optional: split the generated tiles into train/val/test partitions.
-# Ratios must add up to 1.0. Omit "test" (or set it to 0) to skip a test split.
-# When this section is present and format includes "yolo", a data.yaml
-# (Ultralytics-style) is also written pointing at the split folders.
-# Remove this whole section to keep a single flat dataset (no splitting).
+# Optional: splits tiles into train/val/test. Ratios must sum to 1.0; omit "test" to skip it.
+# Remove this section for a single flat dataset.
 split:
   train: 0.7
-  val: 0.2
-  test: 0.1
-  seed: 42   # optional, for a reproducible shuffle
+  val:   0.2
+  test:  0.1
+  seed:  42   # optional, for a reproducible shuffle
+
+

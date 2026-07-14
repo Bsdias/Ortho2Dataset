@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Generates a COCO and/or YOLO dataset from an orthomosaic and any number of
-georeferenced shapefiles, optionally split into train/val/test (see the
-`split` section in config.example.yaml; only configurable via --config).
+georeferenced shapefiles, optionally split into train/val/test and/or with a
+visual QA preview sample rendered (see the `split`/`preview` sections in
+config.example.yaml; only configurable via --config).
 
 Usage:
     # Discover layer names inside a multi-layer GeoPackage first, if needed:
@@ -20,8 +21,10 @@ Usage:
 """
 import json
 import shutil
+import random
 import argparse
 from pathlib import Path
+from collections import defaultdict
 
 import yaml
 import rasterio
@@ -33,14 +36,18 @@ from utils.geometry import clip_to_tile, geom_to_pixel_polygons
 from utils.shape2coco import build_categories, build_annotation
 from utils.shapes import parse_shape_spec, list_layers, load_shape
 from utils.shape2yolo import build_category_id_map, build_yolo_lines, write_label_file, write_classes_file
-from utils.config import load_config, normalize_shapes, DEFAULTS
+from utils.config import load_config, normalize_shapes, parse_preview_config, DEFAULTS
 from utils.split import parse_split_config, assign_splits
+from utils.visualize import draw_coco_preview, draw_yolo_preview
 
 OUTPUT_FORMATS = ("coco", "yolo", "both")
 
 
 class DatasetGenerator:
-    def __init__(self, input_tif, shapes, output_dir, tile_size=1024, res=0.20, output_format="coco", split=None):
+    def __init__(
+        self, input_tif, shapes, output_dir, tile_size=1024, res=0.20, output_format="coco",
+        split=None, preview=None
+    ):
         """
         shapes: dict mapping category name -> (path, layer) to a georeferenced
                 shapefile/GeoPackage. `layer` may be None for single-layer sources.
@@ -49,6 +56,8 @@ class DatasetGenerator:
         output_format: "coco", "yolo", or "both" — which annotation format(s) to write.
         split: parsed split config (see utils.split.parse_split_config), or None
                to keep a single flat dataset with no train/val/test partitioning.
+        preview: parsed preview config (see utils.config.parse_preview_config), or
+                 None to skip generating a visual QA sample.
         """
         self.input_tif = Path(input_tif)
         self.output_dir = Path(output_dir)
@@ -56,6 +65,8 @@ class DatasetGenerator:
         self.target_res = res
         self.output_format = output_format
         self.split = split
+        self.preview = preview
+        self.image_split = {}
 
         self.images_dir = self.output_dir / "images"
         self.images_dir.mkdir(parents=True, exist_ok=True)
@@ -148,10 +159,13 @@ class DatasetGenerator:
                 img_id += 1
 
         if self.split:
-            assignment = assign_splits([img["id"] for img in self.coco["images"]], self.split)
-            self._write_split_outputs(assignment)
+            self.image_split = assign_splits([img["id"] for img in self.coco["images"]], self.split)
+            self._write_split_outputs(self.image_split)
         else:
             self._write_flat_outputs()
+
+        if self.preview:
+            self._write_previews()
 
         print(f"Dataset successfully created at {self.output_dir}")
 
@@ -219,6 +233,49 @@ class DatasetGenerator:
         with open(self.output_dir / "data.yaml", "w") as f:
             yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
         print(f"data.yaml written to {self.output_dir / 'data.yaml'}")
+
+    def _write_previews(self):
+        """Renders a random sample of tiles with their annotations drawn on top,
+        read back from the actual persisted files (not recomputed in-memory), so
+        the preview reflects exactly what ended up on disk for each format.
+        """
+        all_images = self.coco["images"]
+        sample_size = max(1, round(len(all_images) * self.preview["ratio"]))
+        sampled = random.Random(self.preview["seed"]).sample(all_images, min(sample_size, len(all_images)))
+
+        if self.output_format in ("coco", "both"):
+            anns_by_image = defaultdict(list)
+            for ann in self.coco["annotations"]:
+                anns_by_image[ann["image_id"]].append(ann)
+            names_by_cat_id = {cat["id"]: cat["name"] for cat in self.coco["categories"]}
+
+            preview_dir = self.output_dir / "preview" / "coco"
+            for img in sampled:
+                split_name = self.image_split.get(img["id"], "")
+                out_dir = preview_dir / split_name
+                out_dir.mkdir(parents=True, exist_ok=True)
+                draw_coco_preview(
+                    self.images_dir / split_name / img["file_name"],
+                    anns_by_image.get(img["id"], []), names_by_cat_id,
+                    out_dir / img["file_name"]
+                )
+            print(f"COCO preview written to {preview_dir} ({len(sampled)} images)")
+
+        if self.output_format in ("yolo", "both"):
+            names_by_yolo_id = self._names_by_yolo_id()
+
+            preview_dir = self.output_dir / "preview" / "yolo"
+            for img in sampled:
+                split_name = self.image_split.get(img["id"], "")
+                out_dir = preview_dir / split_name
+                out_dir.mkdir(parents=True, exist_ok=True)
+                label_filename = Path(img["file_name"]).stem + ".txt"
+                draw_yolo_preview(
+                    self.images_dir / split_name / img["file_name"],
+                    self.labels_dir / split_name / label_filename, names_by_yolo_id,
+                    out_dir / img["file_name"]
+                )
+            print(f"YOLO preview written to {preview_dir} ({len(sampled)} images)")
 
 
 def parse_shapes(values):
@@ -298,10 +355,12 @@ if __name__ == "__main__":
 
     try:
         split = parse_split_config(config.get("split"))
+        preview = parse_preview_config(config.get("preview"))
     except ValueError as e:
         parser.error(str(e))
 
     gen = DatasetGenerator(
-        tif, shapes, out, tile_size=tile_size, res=res, output_format=output_format, split=split
+        tif, shapes, out, tile_size=tile_size, res=res, output_format=output_format,
+        split=split, preview=preview
     )
     gen.run()
